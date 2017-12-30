@@ -45,7 +45,7 @@ void leave(int i)
 		free(data);
 	if (claimed)
 		if (usb_release_interface(usb_handle, int_num) != 0)
-			perror("can not release inertface");
+			perror("can not release interface");
 	if (usb_handle != NULL)
 		if (usb_close(usb_handle) != 0)
 			perror("can not close interface");
@@ -243,11 +243,11 @@ error:
 	leave(-2);
 }
 
-int s13_to_int(unsigned char high, unsigned char low) {
+int us13_to_int(unsigned char high, unsigned char low, int has_sign) {
 	int res;
 
-	res = ((int)(high & 0x1f) << 8) + low;
-	if (high & 0x10)
+	res = ((int)(high & 0x1f) << 8) | low;
+	if (has_sign && (high & 0x10))
 		res -= 0x2000;
 
 	return res;
@@ -268,16 +268,16 @@ void decode_data()
 	case screen:
 		/* FIXME */
 	case pad:
-		X = ((int)data[2] << 8) + data[3];
-		Y = ((int)data[4] << 8) + data[5];
+		X = us13_to_int(data[2], data[3], 0);
+		Y = us13_to_int(data[4], data[5], 0);
 		B = data[1];
 		P = data[6];
 		W = data[0] & 0x0f;
 		printf("X:%-5u Y:%-5u B:%02hhx P:%-3hhu W:%-2hhu", X, Y, B, P, W);
 		break;
 	case stick:
-		X = s13_to_int(data[2], data[3]);
-		Y = s13_to_int(data[4], data[5]);
+		X = us13_to_int(data[2], data[3], 1);
+		Y = us13_to_int(data[4], data[5], 1);
 		B = data[1];
 		P = data[6];
 		printf("X:%-5i Y:%-5i B:%02hhx P:%-3hhu", X, Y, B, P);
