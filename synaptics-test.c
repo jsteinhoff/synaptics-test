@@ -27,7 +27,7 @@ struct {
 
 struct usb_dev_handle *usb_handle = NULL;
 int endpoint;
-char* data = NULL;
+unsigned char* data = NULL;
 int max_data;
 int claimed = 0;
 
@@ -36,6 +36,8 @@ int alt = 0;
 int newline = 1;
 int skip = 0;
 int decode = 0;
+
+enum data_type {mouse, pad, stick, screen} type;
 
 void leave(int i)
 {
@@ -62,6 +64,30 @@ char* get_dev_name(struct usb_device *dev)
 	return dev_names[i].dev_name ? dev_names[i].dev_name : "unknown";
 }
 
+void get_data_type(struct usb_device *dev)
+{
+	if (max_data < 8) {
+		type = mouse;
+		return;
+	}
+
+	switch (dev->descriptor.idProduct) {
+	case 0x0006:
+		type = screen;
+		break;
+	case 0x0007:
+		type = stick;
+		break;
+	case 0x0009:
+		if (int_num == 1) {
+			type = stick;
+			break;
+		}
+	default:
+		type = pad;
+	}
+}
+
 void find_endpoint(struct usb_interface_descriptor* interface)
 {
 	struct usb_endpoint_descriptor* ep;
@@ -70,7 +96,7 @@ void find_endpoint(struct usb_interface_descriptor* interface)
 	for (i=0; i<interface->bNumEndpoints; i++) {
 		ep = &interface->endpoint[i];
 		if ( (ep->bEndpointAddress & USB_ENDPOINT_DIR_MASK) &&
-		     ((ep->bmAttributes & USB_ENDPOINT_TYPE_MASK) 
+		     ((ep->bmAttributes & USB_ENDPOINT_TYPE_MASK)
 					== USB_ENDPOINT_TYPE_INTERRUPT) ) {
 			endpoint = ep->bEndpointAddress;
 			printf("found endpoint with address 0x%x\n", endpoint);
@@ -149,6 +175,7 @@ void init_device(void)
 			if ((dev->descriptor.idVendor == SYNAPTICS_VENDOR_ID)) {
 				printf("found device: %s\n", get_dev_name(dev));
 				claim_device(dev);
+				get_data_type(dev);
 				return;
 			}
 		}
@@ -171,8 +198,8 @@ Description:\n\
 		(this will switch the interface from alternate\n\
 		 setting 0 to alternate setting 1)\n\
 	--decoce: try to decode the data packets\n\
-		(this will maybe only work for relative data or\n\
-		 for alsolute data from a touchpad)\n\
+		(this will maybe not work for\n\
+		 absolute data from a touchscreen)\n\
 		X: relative or absolute x position\n\
 		Y: relative or absolute y position\n\
 		B: buttons (hex)\n\
@@ -216,17 +243,45 @@ error:
 	leave(-2);
 }
 
+int s13_to_int(unsigned char high, unsigned char low) {
+	int res;
+
+	res = ((int)(high & 0x1f) << 8) + low;
+	if (high & 0x10)
+		res -= 0x2000;
+
+	return res;
+}
+
 void decode_data()
 {
+	int X, Y, B, P, W;
+
 	printf("    ");
-	if (max_data < 8) {
-		printf("X:%+-4hhi Y:%+-4hhi B:%02hhx", data[1], data[2], data[0]);
-	} else {
-		/* FIXME: is this still right for Trackpoint or Touchscreen ? */
-		printf("X:%-5u Y:%-5u B:%02hhx P:%-3hhu W:%-2hhu",
-			((int)data[2] << 8) + data[3],
-			((int)data[4] << 8) + data[5],
-			data[1], data[6], data[0] & 0x0f);
+	switch (type) {
+	case mouse:
+		X = data[1];
+		Y = data[2];
+		B = data[0];
+		printf("X:%+-4hhi Y:%+-4hhi B:%02hhx", X, Y, B);
+		break;
+	case screen:
+		/* FIXME */
+	case pad:
+		X = ((int)data[2] << 8) + data[3];
+		Y = ((int)data[4] << 8) + data[5];
+		B = data[1];
+		P = data[6];
+		W = data[0] & 0x0f;
+		printf("X:%-5u Y:%-5u B:%02hhx P:%-3hhu W:%-2hhu", X, Y, B, P, W);
+		break;
+	case stick:
+		X = s13_to_int(data[2], data[3]);
+		Y = s13_to_int(data[4], data[5]);
+		B = data[1];
+		P = data[6];
+		printf("X:%-5i Y:%-5i B:%02hhx P:%-3hhu", X, Y, B, P);
+		break;
 	}
 }
 
@@ -244,7 +299,7 @@ int main(int argc, char **argv)
 
 	while (1) {
 		packet++;
-		data_size = usb_interrupt_read(usb_handle, endpoint, data, max_data, 0);
+		data_size = usb_interrupt_read(usb_handle, endpoint, (char *) data, max_data, 0);
 		if (data_size < 0) {
 			perror("can not read from endpoint");
 			leave(-1);
